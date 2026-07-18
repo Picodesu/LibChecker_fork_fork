@@ -83,6 +83,12 @@ import com.absinthe.libchecker.utils.extensions.toHexString
 import com.absinthe.libchecker.utils.manifest.StaticLibraryReader
 import com.absinthe.libraries.utils.manager.TimeRecorder
 import com.android.tools.smali.dexlib2.Opcodes
+import com.android.tools.smali.dexlib2.ReferenceType
+import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile
+import com.android.tools.smali.dexlib2.iface.ClassDef
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
+import com.android.tools.smali.dexlib2.iface.reference.MethodReference
+import com.android.tools.smali.dexlib2.iface.reference.StringReference
 import dev.rikka.tools.refine.Refine
 import java.io.File
 import java.security.interfaces.DSAPublicKey
@@ -1027,6 +1033,104 @@ object PackageUtils {
       ET_HIPROC -> "Processor-specific"
       else -> "Not Standard ELF"
     }
+  }
+
+  private val ITGSA_ACTIONS = setOf("itgsa.intent.action.TRIM", "itgsa.intent.action.KILL")
+  private val INTENT_FILTER_TYPE = "Landroid/content/IntentFilter;"
+  private val ADD_ACTION_NAME = "addAction"
+  private val INIT_NAME = "<init>"
+
+  data class DexScanResult(
+    val foundClasses: List<String>,
+    val hasItgsaFairMemoryBytecode: Boolean
+  )
+
+  /**
+   * Scan DEX for class patterns and ITGSA Fair Memory bytecode
+   * @param sourceFile Source APK/DEX file
+   * @param classes Class patterns to match
+   * @param hasAny true if matching any class pattern is enough
+   * @return DexScanResult with matched classes and fair memory bytecode flag
+   */
+  fun scanDexForFeatures(
+    sourceFile: File,
+    classes: List<String>,
+    hasAny: Boolean = false
+  ): DexScanResult {
+    val matched = mutableSetOf<String>()
+    var fairMemoryBytecode = false
+    return runCatching {
+      FastDexFileFactory.loadDexContainer(sourceFile, Opcodes.getDefault()).apply {
+        for (entry in dexEntryNames) {
+          val allFound = matched.size == classes.size
+          if (allFound && fairMemoryBytecode) return@runCatching DexScanResult(
+            matched.toList(), true
+          )
+          val dex = getEntry(entry)?.dexFile ?: continue
+          val needScan = !fairMemoryBytecode && hasItgsaStringReferences(dex)
+          if (allFound && !needScan) continue
+
+          for (classDef in dex.classes) {
+            if (!allFound) matchClassPattern(classDef.type, classes, matched)?.let { pattern ->
+              matched += pattern
+              if ((matched.size == classes.size || hasAny) && fairMemoryBytecode) {
+                return@runCatching DexScanResult(matched.toList(), true)
+              }
+            }
+            if (needScan && !fairMemoryBytecode) fairMemoryBytecode = classDef.hasItgsaIntentFilterUsage()
+          }
+        }
+      }
+      DexScanResult(matched.toList(), fairMemoryBytecode)
+    }.getOrDefault(DexScanResult(matched.toList(), fairMemoryBytecode))
+  }
+
+  private fun matchClassPattern(
+    classType: String,
+    classes: List<String>,
+    matched: Set<String>
+  ): String? = classes.firstOrNull { pattern ->
+    pattern !in matched && (if (pattern.last() == '*') {
+      classType.startsWith(pattern.removeSuffix("*"))
+    } else classType == pattern)
+  }
+
+  /**
+   * Check if DEX string pool contains ITGSA action strings
+   * @param dexFile DEX file to scan
+   * @return true if any ITGSA action string is found
+   */
+  private fun hasItgsaStringReferences(dexFile: com.android.tools.smali.dexlib2.iface.DexFile): Boolean {
+    val backing = dexFile as? DexBackedDexFile ?: return true
+    return backing.stringSection.any { it in ITGSA_ACTIONS }
+  }
+
+  /**
+   * Check if class uses ITGSA action strings with IntentFilter
+   * @return true if class references ITGSA action strings and creates an IntentFilter
+   */
+  private fun ClassDef.hasItgsaIntentFilterUsage(): Boolean {
+    var hasItgsaAction = false
+    var hasIntentFilterUsage = false
+
+    for (method in methods) {
+      val impl = method.implementation ?: continue
+      for (instruction in impl.instructions) {
+        if (instruction !is ReferenceInstruction) continue
+        when (val ref = instruction.reference) {
+          is StringReference -> if (ref.string in ITGSA_ACTIONS) hasItgsaAction = true
+          is MethodReference -> if (ref.isIntentFilterUsage()) hasIntentFilterUsage = true
+        }
+        if (hasItgsaAction && hasIntentFilterUsage) return true
+      }
+    }
+    return false
+  }
+
+  private fun MethodReference.isIntentFilterUsage(): Boolean = definingClass == INTENT_FILTER_TYPE && when (name) {
+    ADD_ACTION_NAME -> true
+    INIT_NAME -> parameterTypes.size == 1 && parameterTypes[0] == "Ljava/lang/String;"
+    else -> false
   }
 
   /**

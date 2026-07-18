@@ -106,7 +106,9 @@ class GetAppDetailFeaturesUseCase(
     }
 
     packageInfo.applicationInfo?.sourceDir?.let { sourceDir ->
-      val foundList = getFeaturesFoundDexList(feat, sourceDir)
+      val scanResult = getFeaturesFoundDexList(feat, sourceDir)
+      val foundList = scanResult.foundClasses
+
       if ((feat and Features.RX_JAVA) > 0) {
         val version = packageInfo.getRxJavaVersion(foundList)
         emitFeature(VersionedFeature(Features.RX_JAVA, version))
@@ -126,7 +128,7 @@ class GetAppDetailFeaturesUseCase(
         if (packageInfo.isUseVoipServiceKit(foundList)) {
           add(ItgsaCapability.VOIP_SERVICE_KIT.key)
         }
-        if (packageInfo.isUseFairMemoryMechanism()) {
+        if (packageInfo.isUseFairMemoryMechanism(scanResult.hasItgsaFairMemoryBytecode)) {
           add(ItgsaCapability.FAIR_MEMORY_MECHANISM.key)
         }
         if (packageInfo.isUseSecurityPasteView(foundList)) {
@@ -270,7 +272,7 @@ class GetAppDetailFeaturesUseCase(
     return metaData.getBoolean("xposedmodule") || metaData.containsKey("xposedminversion")
   }
 
-  private fun getFeaturesFoundDexList(feat: Int, sourceDir: String): List<String>? {
+  private fun getFeaturesFoundDexList(feat: Int, sourceDir: String): PackageUtils.DexScanResult {
     val dexList = mutableListOf<String>()
     if ((feat and Features.RX_JAVA) > 0) {
       dexList.addAll(
@@ -301,14 +303,10 @@ class GetAppDetailFeaturesUseCase(
     }
     if (dexList.isNotEmpty()) {
       dexList.add("org.jetbrains.compose.*".toClassDefType())
-      dexList.add("com.voip.service.*".toClassDefType())
-      dexList.add("com.os.widget.SecurityPasteView".toClassDefType())
     }
-    return if (dexList.isNotEmpty()) {
-      PackageUtils.findDexClasses(File(sourceDir), dexList)
-    } else {
-      null
-    }
+    dexList.add("com.voip.service.*".toClassDefType())
+    dexList.add("com.os.widget.SecurityPasteView".toClassDefType())
+    return PackageUtils.scanDexForFeatures(File(sourceDir), dexList)
   }
 
   private fun getAllAppIcons(packageInfo: PackageInfo): List<AppIconItem> {

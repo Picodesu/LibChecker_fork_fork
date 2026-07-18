@@ -973,7 +973,8 @@ fun PackageInfo.getSignatureSchemes(): List<String> {
 fun PackageInfo.isUseVoipServiceKit(foundList: List<String>? = null): Boolean {
   val file = File(applicationInfo?.sourceDir ?: return false)
   val realFoundList = foundList ?: PackageUtils.findDexClasses(
-    file, listOf("com.voip.service.*".toClassDefType())
+    file,
+    listOf("com.voip.service.*".toClassDefType())
   )
   val foundInDex = realFoundList.contains("com.voip.service.*".toClassDefType())
   return foundInDex
@@ -981,17 +982,20 @@ fun PackageInfo.isUseVoipServiceKit(foundList: List<String>? = null): Boolean {
 
 /**
  * Check if an app uses ITGSA Fair Runtime Memory Mechanism
+ * @param bytecodeDetected Pre-computed bytecode analysis result from scanDexForFeatures
  * @return True if using Fair Runtime Memory Mechanism
  * https://developer.honor.com/cn/docs/adaptation_guide/guides/fair_memory_scheduling
  */
-fun PackageInfo.isUseFairMemoryMechanism(): Boolean {
+fun PackageInfo.isUseFairMemoryMechanism(bytecodeDetected: Boolean = false): Boolean {
+  if (bytecodeDetected) return true
+
   val sourceDir = applicationInfo?.sourceDir ?: return false
   val result = runCatching {
     IntentFilterUtils.parseComponentsFromApk(sourceDir).any { component ->
-        component.type == RECEIVER && component.intentFilters.any { filter ->
-          filter.actions.any { it in listOf("itgsa.intent.action.TRIM", "itgsa.intent.action.KILL") }
-        }
+      component.type == RECEIVER && component.intentFilters.any { filter ->
+        filter.actions.any { it in listOf("itgsa.intent.action.TRIM", "itgsa.intent.action.KILL") }
       }
+    }
   }.getOrDefault(false)
   return result
 }
@@ -1004,9 +1008,9 @@ fun PackageInfo.isUseFairMemoryMechanism(): Boolean {
 fun PackageInfo.isUseSecurityPasteView(foundList: List<String>? = null): Boolean {
   val file = File(applicationInfo?.sourceDir ?: return false)
   val realFoundList = foundList ?: PackageUtils.findDexClasses(
-    file, listOf("com.os.widget.SecurityPasteView".toClassDefType())
+    file,
+    listOf("com.os.widget.SecurityPasteView".toClassDefType())
   )
   val foundInDex = realFoundList.contains("com.os.widget.SecurityPasteView".toClassDefType())
   return foundInDex
 }
-

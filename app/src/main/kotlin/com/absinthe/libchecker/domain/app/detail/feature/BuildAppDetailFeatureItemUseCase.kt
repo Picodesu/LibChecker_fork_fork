@@ -84,11 +84,15 @@ class BuildAppDetailFeatureItemUseCase {
           ?.split(",")
           ?.mapNotNull { ItgsaCapability.fromKey(it)?.titleRes }
           ?: emptyList()
-        AppDetailFeatureItemData(
-          icon = resourceIcon(R.drawable.ic_itgsa),
-          titleRes = R.string.itgsa,
-          action = AppDetailFeatureAction.Itgsa(capabilities)
-        )
+        if (capabilities.isNotEmpty()) {
+          AppDetailFeatureItemData(
+            icon = resourceIcon(R.drawable.ic_itgsa),
+            titleRes = R.string.itgsa,
+            action = AppDetailFeatureAction.Itgsa(capabilities)
+          )
+        } else {
+          null
+        }
       }
 
       Features.LIVE_UPDATE_NOTIFICATION -> AppDetailFeatureItemData(
