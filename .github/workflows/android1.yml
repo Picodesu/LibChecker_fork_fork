@@ -1,0 +1,112 @@
+name: Android CI
+
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '.idea/**'
+      - '.gitattributes'
+      - '.github/**/*.json'
+      - '.gitignore'
+      - '.gitmodules'
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+  pull_request:
+    paths-ignore:
+      - '.idea/**'
+      - '.gitattributes'
+      - '.github/**/*.json'
+      - '.gitignore'
+      - '.gitmodules'
+      - '**.md'
+      - 'LICENSE'
+      - 'NOTICE'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+      - name: Test workflow scripts
+        run: python3 -m unittest discover -s .github/scripts/tests -p 'test*.py'
+      - run: ./gradlew --non-interactive spotlessCheck
+
+  build:
+    name: Build (${{ matrix.flavor }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: foss
+            assemble_task: app:assembleFossRelease
+            artifact_name: Foss
+            apk_path: app/build/outputs/apk/foss/release
+          - flavor: market
+            assemble_task: app:assembleMarketRelease
+            artifact_name: Market
+            apk_path: app/build/outputs/apk/market/release
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'zulu'
+          java-version: 25
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+      - name: Detect dev version
+        id: version-check
+        run: |
+          base_version=$(grep 'const val baseVersionName' build-logic/src/main/kotlin/Projects.kt | sed 's/.*"\(.*\)".*/\1/')
+          if git tag -l "$base_version" | grep -q .; then
+            echo "is_dev=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_dev=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Write sign info
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        run: |
+          if [ ! -z "${{ secrets.SIGNING_KEY }}" ]; then
+            echo releaseStorePassword='${{ secrets.KEY_STORE_PASSWORD }}' >> gradle.properties
+            echo releaseKeyAlias='${{ secrets.ALIAS }}' >> gradle.properties
+            echo releaseKeyPassword='${{ secrets.KEY_PASSWORD }}' >> gradle.properties
+            echo releaseStoreFile='${{ github.workspace }}/key.jks' >> gradle.properties
+            echo ${{ secrets.SIGNING_KEY }} | base64 --decode > ${{ github.workspace }}/key.jks
+          fi
+      - name: Clean build
+        if: steps.version-check.outputs.is_dev == 'false'
+        run: ./gradlew --non-interactive clean
+      - name: Build with Gradle
+        run: ./gradlew --non-interactive ${{ matrix.assemble_task }}
+      - name: Upload built APK
+        if: success() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ github.workspace }}/${{ matrix.apk_path }}
+      - name: Upload mappings
+        if: success() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master' && matrix.flavor == 'market'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mappings
+          path: "app/build/outputs/apk/mapping/marketRelease"
